@@ -239,19 +239,18 @@ final class PanelPlacement {
         cardPlacementBounds = Self.cardBounds(visible: visible, panelFrame: frame)
     }
 
-    /// The card's height limit, pointer included: the card budget, and for a
-    /// rail lying across no more than the room between the rail and the
-    /// usable edge, less the gap. Beside a side rail the pointer is on the
-    /// card's flank and takes no height.
+    /// A horizontal rail opens toward the usable edge; beside a vertical rail
+    /// the card can slide along the whole usable height. Both leave breathing
+    /// room on the display. Placement reserves the screen budget in the window.
     static func cardRoom(edge: PanelEdge, railOrigin: CGPoint, rail: CGSize, in visible: CGRect) -> CGFloat? {
-        let budget = DetailCardLayout.screenHeightLimit(in: visible)
         let room: CGFloat
         switch edge {
         case .top: room = (railOrigin.y - rail.height) - visible.minY
         case .bottom: room = visible.maxY - railOrigin.y
-        case .left, .right: return budget
+        case .left, .right: room = visible.height
         }
-        return max(min(room - DetailCardLayout.horizontalGap, budget + DetailCardLayout.pointerWidth), 0)
+        return max(min(room - DetailCardLayout.horizontalGap,
+                       DetailCardLayout.screenHeightLimit(in: visible)), 0)
     }
 
     /// Which display the rail was left on, as `PanelScreen` names them.

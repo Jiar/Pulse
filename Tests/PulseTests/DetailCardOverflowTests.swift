@@ -103,6 +103,24 @@ extension PanelGlobalsSuite {
                 for: AccountKey(.pulseExtension, slot: slot), now: Date(timeIntervalSince1970: 1_000))
         }
 
+        @Test("A pinned quota near the end stays in the summary; every other quota stays in source order")
+        func selectedQuota() {
+            let usage = reading()
+            let card = UsageDetailCard(usage: usage, preferredWindowID: "extension.quota-19",
+                                       edge: .right, pointerCenter: 60)
+            #expect(card.summaryWindow?.id == "extension.quota-19")
+            #expect(card.detailWindows.map(\.id) == usage.windows.dropLast().map(\.id))
+            #expect(card.detailWindows.count + 1 == 20)
+            #expect(usage.metrics.map(\.id) == ["first", "second", "third", "last"])
+            #expect(usage.metrics.filter(\.hasTrend).count == 2)
+            #expect(usage.creditBalance != nil)
+            let automatic = UsageDetailCard(usage: usage, edge: .right, pointerCenter: 60)
+            #expect(automatic.summaryWindow?.id == "extension.quota-0")
+            #expect(automatic.detailWindows.last?.id == "extension.quota-19")
+            let missingPin = UsageDetailCard(usage: usage, preferredWindowID: "missing", edge: .left, pointerCenter: 60)
+            #expect(missingPin.summaryWindow == automatic.summaryWindow)
+        }
+
         @Test("Every size, bar style and forecast/detail budget bounds every edge")
         func budgets() {
             let size = PanelSize.allCases.first { $0.scale == PanelMetrics.scale } ?? .default
@@ -168,7 +186,7 @@ extension PanelGlobalsSuite {
         func hosted(edge: PanelEdge) async throws {
             let usage = reading()
             for room: CGFloat? in [nil, DetailCardLayout.maximumHeight, DetailCardLayout.maximumHeight * 2] {
-                let card = UsageDetailCard(usage: usage,
+                let card = UsageDetailCard(usage: usage, preferredWindowID: "extension.quota-19",
                     edge: edge, pointerCenter: 60, maxHeight: room)
                 let host = NSHostingView(rootView: card.fixedSize().environment(\.colorScheme, .dark))
                 host.setFrameSize(CGSize(width: 500, height: 1_400))
@@ -216,15 +234,16 @@ extension PanelGlobalsSuite {
             }
         }
 
-        @Test("Another account opens at the top, at its own height")
-        func switchingAccounts() async throws {
+        @Test("Another account or selected quota opens at the top, at its own height", arguments: [false, true])
+        func switchingAccounts(sameAccount: Bool) async throws {
             let first = reading(slot: "first")
-            let second = reading(slot: "second")
+            let second = reading(slot: sameAccount ? "first" : "second")
             let short = reading(count: 2, slot: "short")
-            func card(_ usage: ProviderUsage) -> some View {
-                UsageDetailCard(usage: usage, edge: .right, pointerCenter: 60).fixedSize()
+            func card(_ usage: ProviderUsage, preferredWindowID: String? = nil) -> some View {
+                UsageDetailCard(usage: usage, preferredWindowID: preferredWindowID,
+                                edge: .right, pointerCenter: 60).fixedSize()
             }
-            let host = NSHostingView(rootView: card(first))
+            let host = NSHostingView(rootView: card(first, preferredWindowID: "extension.quota-0"))
             host.setFrameSize(CGSize(width: 500, height: 1_400))
             let window = NSWindow(contentRect: host.frame, styleMask: .borderless,
                                   backing: .buffered, defer: false)
@@ -244,10 +263,12 @@ extension PanelGlobalsSuite {
             scroll.reflectScrolledClipView(scroll.contentView)
             #expect(abs(scroll.contentView.bounds.minY - top) > 1)
 
-            // …the next account's opens at the top.
-            host.rootView = card(second)
+            // …another account, or another quota of this account, opens at the top.
+            host.rootView = card(second, preferredWindowID: sameAccount ? "extension.quota-19" : "extension.quota-0")
             try await settle(host)
+            let previousScroll = scroll
             scroll = try #require(scrollView(in: host))
+            #expect(scroll === previousScroll)
             #expect(abs(scroll.contentView.bounds.minY - top) < 1)
 
             // A short account is laid out at its own height, not the last one's.

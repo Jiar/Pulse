@@ -70,20 +70,20 @@ enum DetailCardLayout {
     /// instead — see its `cardHeight`.
     static var estimatedHeight: CGFloat { height(forWindows: 2) }
 
-    /// Room the panel leaves for the tallest card: six limits and a
-    /// footnote. A longer card keeps this height and scrolls inside it rather
-    /// than growing into a column down the screen.
+    /// Leave space around a long card on the display that owns the rail.
+    static var maximumScreenFraction: CGFloat { 0.75 }
+    static func screenHeightLimit(in visible: CGRect) -> CGFloat {
+        max(visible.height, 0) * maximumScreenFraction
+    }
+
+    /// Fallback body budget for previews and views not yet placed on a screen.
+    /// The live panel reserves 75% of its owning display's usable height
+    /// before any card opens; that screen budget replaces this row estimate.
     static var maximumHeight: CGFloat { height(forWindows: 6, footnote: true) }
 
-    /// How far a long card's scrolled rows fade under its header. Taken out
-    /// of `contentSpacing`, so it must stay smaller than that.
+    /// How far scrolled rows fade under the summary. Taken out of
+    /// `contentSpacing`, so it must stay smaller than that.
     static var topFade: CGFloat { 8 * PanelMetrics.scale }
-
-    /// The card budget on a display: `maximumHeight`, or less on a screen too
-    /// short to leave a quarter of it clear around the card.
-    static func screenHeightLimit(in visible: CGRect) -> CGFloat {
-        min(max(visible.height, 0) * 0.75, maximumHeight)
-    }
 
     static func height(forWindows count: Int, footnote: Bool = false) -> CGFloat {
         let detailed = PanelMetrics.showsDetailedCard
@@ -157,6 +157,9 @@ struct UsageDetailCard: View {
     /// same plan are told apart by nothing else, and a card headed "Codex" on
     /// both of them is a card that cannot say which one you are looking at.
     var title: String?
+    /// The resolved quota used by the selected ring, including a native pin
+    /// and any per-model group filtering. It remains visible while scrolling.
+    var preferredWindowID: String?
     /// Which screen edge the panel is docked against; the pointer goes on the
     /// side facing the rail.
     let edge: PanelEdge
@@ -200,9 +203,9 @@ struct UsageDetailCard: View {
     /// Available screen height, pointer included. Even without a placement
     /// limit the body must fit the fixed panel's card budget.
     var maxHeight: CGFloat?
-    /// The header's and the details' measured heights, for the account they
-    /// were measured on. The card is one view across every account, so a
-    /// height measured on the last one must not lay out the next.
+    /// The summary's and the details' measured heights, for the account and
+    /// selected quota they were measured on. The card is one view across
+    /// selections, so the last selection's height must not lay out the next.
     @State private var measured = MeasuredHeights()
 
     var body: some View {
@@ -226,36 +229,57 @@ struct UsageDetailCard: View {
         .accessibilityLabel(String.localized("\(title ?? usage.provider.displayName) usage details"))
     }
 
+    /// The ring's own selection, kept out of the scrolling details. Selecting
+    /// a quota near the end of a long extension must not hide the summary.
+    var summaryWindow: UsageWindow? { usage.headlineWindow(preferring: preferredWindowID) }
+    var detailWindows: [UsageWindow] {
+        let summaryID = summaryWindow?.id
+        return usage.windows.filter { $0.id != summaryID }
+    }
+
+    private var hasDetails: Bool {
+        if !detailWindows.isEmpty || resetCredits != nil || !usage.metrics.isEmpty || saysNothing
+            || footnote != nil || (isDetailed && (spend != nil || qoderCredits != nil)) {
+            return true
+        }
+        if (usage.windows.isEmpty || usage.provider == .pulseExtension), usage.creditBalance != nil { return true }
+        if case .unavailable = usage.state { return true }
+        return false
+    }
+
+    private var selectionID: String { usage.account.id + ":" + (summaryWindow?.id ?? "") }
+
     private struct MeasuredHeights {
-        var account = ""
+        var selection = ""
         var summary: CGFloat?
         var details: CGFloat?
     }
 
-    /// What a height is reported against: the same height on another account
-    /// is a new measurement, not an unchanged one.
+    /// What a height is reported against: the same height on another
+    /// selection is a new measurement, not an unchanged one.
     private struct Measurement: Equatable {
-        let account: String
+        let selection: String
         let height: CGFloat
     }
 
     private func record(_ measurement: Measurement, summary: Bool) {
-        if measured.account != measurement.account {
-            measured = MeasuredHeights(account: measurement.account)
+        if measured.selection != measurement.selection {
+            measured = MeasuredHeights(selection: measurement.selection)
         }
         if summary { measured.summary = measurement.height } else { measured.details = measurement.height }
     }
 
     private var current: MeasuredHeights {
-        measured.account == usage.account.id ? measured : MeasuredHeights(account: usage.account.id)
+        measured.selection == selectionID ? measured : MeasuredHeights(selection: selectionID)
     }
 
     private var viewport: DetailCardViewport {
-        // Until this account's rows are measured, estimate them from its own
-        // limits rather than the last account's height.
+        // Until this selection's rows are measured, estimate them from its
+        // own limits rather than the last selection's height.
         let summary = current.summary ?? (DetailCardLayout.headerHeight
-            + (isDetailed ? DetailCardLayout.headerLineSpacing + DetailCardLayout.footnoteHeight : 0))
-        let rows = CGFloat(max(usage.windows.count, 1))
+            + (isDetailed ? DetailCardLayout.headerLineSpacing + DetailCardLayout.footnoteHeight : 0)
+            + (summaryWindow == nil ? 0 : DetailCardLayout.contentSpacing + DetailCardLayout.rowHeight))
+        let rows = CGFloat(max(detailWindows.count, 1))
         let details = current.details
             ?? rows * DetailCardLayout.rowHeight + (rows - 1) * DetailCardLayout.contentSpacing
         return DetailCardViewport(
@@ -263,25 +287,25 @@ struct UsageDetailCard: View {
                 maxHeight: maxHeight, fallbackHeight: DetailCardLayout.maximumHeight,
                 pointerHeight: edge.isVertical ? 0 : DetailCardLayout.pointerWidth),
             summary: summary,
-            details: details,
+            details: hasDetails ? details : 0,
             spacing: DetailCardLayout.contentSpacing, padding: DetailCardLayout.padding,
             minimumDetailHeight: DetailCardLayout.rowHeight,
             fade: DetailCardLayout.topFade
         )
     }
 
-    /// The top of the scrolled content, which a new account scrolls back to.
+    /// The top of the scrolled content, which a new selection scrolls back to.
     private static let scrollTop = "detail-card-top"
 
     /// Always bounded by the fixed window, on every edge. Short cards keep
-    /// their natural height. A long card keeps its header and scrolls the
+    /// their natural height. A long card keeps its summary and scrolls the
     /// rest, with no scroller: the rows fade into the card's foot instead, so
     /// every row keeps the card's full width. Only an unusually small
-    /// placement scrolls the header too.
+    /// placement scrolls the summary too.
     ///
-    /// **One scroll view across accounts, scrolled back to the top on a new
-    /// one.** Giving it the account as its identity replaced the whole view
-    /// inside the card's spring, and the two accounts' rows cross-faded over
+    /// **One scroll view across selections, scrolled back to the top on a new
+    /// one.** Giving it the selection as its identity replaced the whole view
+    /// inside the card's spring, and two selections' rows cross-faded over
     /// each other.
     private var bounded: some View {
         let layout = viewport
@@ -290,27 +314,29 @@ struct UsageDetailCard: View {
                 if layout.fixesSummary {
                     VStack(alignment: .leading, spacing: layout.stackSpacing) {
                         measuredSummary
-                        ScrollView(.vertical) {
-                            measuredDetails
-                                .padding(.top, layout.topFade)
-                                .padding(.bottom, layout.bottomFade)
-                                .id(Self.scrollTop)
+                        if hasDetails {
+                            ScrollView(.vertical) {
+                                measuredDetails
+                                    .padding(.top, layout.topFade)
+                                    .padding(.bottom, layout.bottomFade)
+                                    .id(Self.scrollTop)
+                            }
+                            .scrollIndicators(.never)
+                            .defaultScrollAnchor(.top)
+                            .scrollBounceBehavior(.basedOnSize)
+                            .scrollDisabled(!layout.scrolls)
+                            .mask { Self.fadeMask(top: layout.topFade, bottom: layout.bottomFade) }
+                            .frame(height: layout.scrollHeight)
                         }
-                        .scrollIndicators(.never)
-                        .defaultScrollAnchor(.top)
-                        .scrollBounceBehavior(.basedOnSize)
-                        .scrollDisabled(!layout.scrolls)
-                        .mask { Self.fadeMask(top: layout.topFade, bottom: layout.bottomFade) }
-                        .frame(height: layout.scrollHeight)
                     }
                     .padding([.horizontal, .top], DetailCardLayout.padding)
                     .padding(.bottom, layout.bottomPadding)
                     .frame(width: DetailCardLayout.width, height: layout.height, alignment: .topLeading)
                 } else {
                     ScrollView(.vertical) {
-                        VStack(alignment: .leading, spacing: DetailCardLayout.contentSpacing) {
+                        VStack(alignment: .leading, spacing: hasDetails ? DetailCardLayout.contentSpacing : 0) {
                             measuredSummary
-                            measuredDetails
+                            if hasDetails { measuredDetails }
                         }
                         .padding(DetailCardLayout.padding)
                         .id(Self.scrollTop)
@@ -321,7 +347,7 @@ struct UsageDetailCard: View {
                     .frame(width: DetailCardLayout.width, height: layout.height)
                 }
             }
-            .onChange(of: usage.account.id) {
+            .onChange(of: selectionID) {
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
                 withTransaction(transaction) { proxy.scrollTo(Self.scrollTop, anchor: .top) }
@@ -338,15 +364,18 @@ struct UsageDetailCard: View {
     }
 
     private var measuredSummary: some View {
-        header
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .background(GeometryReader { proxy in
-                Color.clear.onChange(of: Measurement(account: usage.account.id, height: proxy.size.height),
-                                     initial: true) { _, measurement in
-                    record(measurement, summary: true)
-                }
-            })
+        VStack(alignment: .leading, spacing: DetailCardLayout.contentSpacing) {
+            header
+            if let window = summaryWindow { quotaRow(window) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(GeometryReader { proxy in
+            Color.clear.onChange(of: Measurement(selection: selectionID, height: proxy.size.height),
+                                 initial: true) { _, measurement in
+                record(measurement, summary: true)
+            }
+        })
     }
 
     private var measuredDetails: some View {
@@ -354,7 +383,7 @@ struct UsageDetailCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
             .background(GeometryReader { proxy in
-                Color.clear.onChange(of: Measurement(account: usage.account.id, height: proxy.size.height),
+                Color.clear.onChange(of: Measurement(selection: selectionID, height: proxy.size.height),
                                      initial: true) { _, measurement in
                     record(measurement, summary: false)
                 }
@@ -380,8 +409,8 @@ struct UsageDetailCard: View {
 
     private var details: some View {
         VStack(alignment: .leading, spacing: DetailCardLayout.contentSpacing) {
-            // However many limits the provider reports, in its own order.
-            ForEach(usage.windows) { window in
+            // Keep every other quota in source order, including the last one.
+            ForEach(detailWindows) { window in
                 quotaRow(window)
             }
 

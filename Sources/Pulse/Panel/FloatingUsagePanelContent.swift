@@ -105,6 +105,7 @@ struct FloatingUsagePanelContent: View {
                             usesGlass: settings.usesGlass,
                             usage: selected,
                             title: selectedTitle ?? "",
+                            preferredWindowID: entries[index].headline?.id,
                             edge: placement.edge,
                             showsRemaining: settings.showsRemaining,
                             showsForecast: settings.showsForecast,

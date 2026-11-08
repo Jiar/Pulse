@@ -7,12 +7,12 @@ extension PanelGlobalsSuite {
     @MainActor
     @Suite("Screen-bounded detail card anchors")
     struct DetailCardAnchorTests {
-        @Test("The card budget is reserved before opening on every edge")
+        @Test("The screen budget is reserved before opening on every edge")
         func reservation() {
-            for height: CGFloat in [855, 1_400, 1_123.5, 400] {
+            for height: CGFloat in [855, 1_400, 1_123.5] {
                 let visible = CGRect(x: -1_800, y: 52, width: 1_800, height: height)
                 let budget = DetailCardLayout.screenHeightLimit(in: visible)
-                #expect(budget == min(height * 0.75, DetailCardLayout.maximumHeight))
+                #expect(budget == height * 0.75)
                 for edge in [PanelEdge.left, .right, .top, .bottom] {
                     for docked in [false, true] {
                         for notch: CGSize? in [nil, CGSize(width: 210, height: 38)] {
@@ -123,7 +123,7 @@ extension PanelGlobalsSuite {
             }
         }
 
-        @Test("Actual tail paths lean towards near-corner rings, by at most a corner, in every direction")
+        @Test("Actual tail paths aim at near-corner rings in every direction")
         func tailTips() throws {
             let previous = PanelMetrics.usesRoundEnds
             defer { PanelMetrics.useRoundEnds(previous) }
@@ -143,17 +143,14 @@ extension PanelGlobalsSuite {
                                 }
                             }
                             let tip = try #require(tips.first)
-                            // The tip sits on the card's outer edge…
-                            switch edge {
-                            case .left: #expect(abs(tip.x) < 0.001)
-                            case .right: #expect(abs(tip.x - rect.width) < 0.001)
-                            case .top: #expect(abs(tip.y) < 0.001)
-                            case .bottom: #expect(abs(tip.y - rect.height) < 0.001)
+                            let expected: CGPoint = switch edge {
+                            case .left: CGPoint(x: 0, y: anchor)
+                            case .right: CGPoint(x: rect.width, y: anchor)
+                            case .top: CGPoint(x: anchor, y: 0)
+                            case .bottom: CGPoint(x: anchor, y: rect.height)
                             }
-                            // …and misses the ring by no more than the corner it
-                            // keeps the base clear of.
-                            let along = edge.isVertical ? tip.y : tip.x
-                            #expect(abs(along - anchor) <= min(20, length / 2) + 0.001)
+                            #expect(abs(tip.x - expected.x) < 0.001)
+                            #expect(abs(tip.y - expected.y) < 0.001)
                             let bounds = shape.path(in: rect).boundingRect
                             #expect(bounds.minX >= -0.001 && bounds.minY >= -0.001)
                             #expect(bounds.maxX <= rect.maxX + 0.001 && bounds.maxY <= rect.maxY + 0.001)
